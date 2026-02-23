@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
-import { getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, deleteDoc, getDocs } from 'firebase/firestore';
 import { Plus, Edit, Trash2, Package, TrendingUp, Clock, DollarSign, Activity, X, Search, CheckCircle, Ship, Megaphone, Settings, Layers, ChevronDown, ChevronUp, AlertTriangle, Sparkles, LogOut, Lock } from 'lucide-react';
 
 // ==========================================
@@ -426,6 +426,30 @@ export default function App() {
     } catch (err) { console.error(err); }
   };
 
+  // פונקציית איפוס מערכת מלא (מחיקת כל הנתונים)
+  const handleResetSystem = async () => {
+    const userConfirm = window.prompt("אזהרה קריטית! 🛑\nפעולה זו תמחק את *כל* המשלוחים, הפריטים והקמפיינים במערכת ולא ניתן לבטל אותה.\nלהמשך, הקלד את המילה 'מחק':");
+    if (userConfirm !== 'מחק') return;
+    
+    setIsSaving(true);
+    try {
+      const collectionsToDelete = ['crm_shipments', 'crm_items', 'crm_campaigns'];
+      
+      for (const colName of collectionsToDelete) {
+        const snapshot = await getDocs(collection(db, colName));
+        const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, colName, d.id)));
+        await Promise.all(deletePromises);
+      }
+      
+      alert("כל הנתונים נמחקו בהצלחה! המערכת כעת נקייה ומוכנה לעבודה מחדש.");
+      setActiveTab('dashboard'); // חזרה לדשבורד
+    } catch (err) {
+      console.error(err);
+      alert("אירעה שגיאה במחיקת הנתונים. ודא שהרשאות הפיירבייס תקינות.");
+    }
+    setIsSaving(false);
+  };
+
   // --- Render Login Screen if not authenticated ---
   if (authChecking) return <div className="min-h-screen flex items-center justify-center bg-gray-50"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-600"></div></div>;
   
@@ -707,17 +731,28 @@ export default function App() {
 
         {/* --- TAB: SETTINGS --- */}
         {activeTab === 'settings' && (
-          <div className="max-w-2xl mx-auto bg-white p-6 border border-slate-200 rounded-lg shadow-sm">
-            <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Settings className="w-5 h-5 text-indigo-600"/> הגדרות נפח (CBM) לפי דגם</h2>
-            <div className="space-y-4">
-              {modelsList.map(model => (
-                <div key={model} className="flex items-center justify-between p-3 bg-slate-50 rounded border border-slate-100">
-                  <span className="font-medium text-slate-700 w-32">{model}</span>
-                  <div className="flex items-center gap-2"><input type="number" step="0.01" min="0" className="w-24 p-2 text-center border border-slate-300 rounded focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" value={settings[model]?.cbm || ''} onChange={(e) => setSettings({...settings, [model]: {cbm: Number(e.target.value)}})}/><span className="text-slate-500 text-sm">CBM</span></div>
-                </div>
-              ))}
+          <div className="max-w-2xl mx-auto space-y-6">
+            <div className="bg-white p-6 border border-slate-200 rounded-lg shadow-sm">
+              <h2 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><Settings className="w-5 h-5 text-indigo-600"/> הגדרות נפח (CBM) לפי דגם</h2>
+              <div className="space-y-4">
+                {modelsList.map(model => (
+                  <div key={model} className="flex items-center justify-between p-3 bg-slate-50 rounded border border-slate-100">
+                    <span className="font-medium text-slate-700 w-32">{model}</span>
+                    <div className="flex items-center gap-2"><input type="number" step="0.01" min="0" className="w-24 p-2 text-center border border-slate-300 rounded focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm" value={settings[model]?.cbm || ''} onChange={(e) => setSettings({...settings, [model]: {cbm: Number(e.target.value)}})}/><span className="text-slate-500 text-sm">CBM</span></div>
+                  </div>
+                ))}
+              </div>
+              <button onClick={saveSettings} className="mt-6 w-full bg-indigo-600 text-white py-2.5 rounded-md font-medium hover:bg-indigo-700">שמור הגדרות מערכת</button>
             </div>
-            <button onClick={saveSettings} className="mt-6 w-full bg-indigo-600 text-white py-2.5 rounded-md font-medium hover:bg-indigo-700">שמור הגדרות מערכת</button>
+
+            {/* NEW: DANGER ZONE FOR RESET */}
+            <div className="bg-red-50 p-6 border border-red-200 rounded-lg shadow-sm">
+              <h2 className="text-xl font-bold text-red-800 mb-2 flex items-center gap-2"><AlertTriangle className="w-5 h-5 text-red-600"/> אזור סכנה: ניקוי שולחן (איפוס נתונים)</h2>
+              <p className="text-sm text-red-600 mb-4 font-medium">כפתור זה ימחק את <strong>כל</strong> המשלוחים, הפריטים במלאי, והקמפיינים שקיימים במערכת בלחיצה אחת. (רשימת הדגמים שלך לא תימחק).</p>
+              <button onClick={handleResetSystem} disabled={isSaving} className="w-full bg-red-600 text-white py-2.5 rounded-md font-medium hover:bg-red-700 transition-colors">
+                {isSaving ? 'מוחק נתונים, אנא המתן...' : 'מחק את כל הנתונים (איפוס מערכת)'}
+              </button>
+            </div>
           </div>
         )}
       </main>
@@ -767,7 +802,17 @@ export default function App() {
                   <div><label className="block text-xs font-medium text-green-800 mb-1">תמחור תוספות (הכנסה מתוספת)</label><input type="number" step="0.01" className="w-full border-green-300 rounded-md p-2 font-bold text-green-700" value={editingData.addOnPrice || 0} onChange={e => setEditingData({...editingData, addOnPrice: Number(e.target.value)})} /></div>
                 </div>
               </div>
-              <button type="submit" className="w-full bg-indigo-600 text-white py-2.5 rounded-md font-medium hover:bg-indigo-700 mt-4">שמור פריט</button>
+
+              {editingData.status !== 'sold' && (
+                <div className="bg-red-50 text-red-700 p-3 rounded-md text-sm font-bold text-center border border-red-200 flex items-center justify-center gap-2 mt-4">
+                  <AlertTriangle className="w-5 h-5" />
+                  <span>הסטטוס הוא לא "נמכר ללקוח" ובגלל זה אין אפשרות לשמור את הנתונים.</span>
+                </div>
+              )}
+
+              <button type="submit" disabled={isSaving || editingData.status !== 'sold'} className="w-full bg-indigo-600 text-white py-2.5 rounded-md font-medium hover:bg-indigo-700 mt-4 disabled:opacity-50 disabled:cursor-not-allowed">
+                {isSaving ? 'שומר...' : 'שמור פריט'}
+              </button>
             </form>
           </div>
         </div>
