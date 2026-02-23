@@ -810,7 +810,14 @@ export default function App() {
                 </div>
               )}
 
-              <button type="submit" disabled={isSaving || editingData.status !== 'sold'} className="w-full bg-indigo-600 text-white py-2.5 rounded-md font-medium hover:bg-indigo-700 mt-4 disabled:opacity-50 disabled:cursor-not-allowed">
+              {editingData.status === 'sold' && !editingData.saleDate && (
+                <div className="bg-red-50 text-red-700 p-3 rounded-md text-sm font-bold text-center border border-red-200 flex items-center justify-center gap-2 mt-4">
+                  <AlertTriangle className="w-5 h-5" />
+                  <span>יש להזין תאריך מכירה על מנת לשמור את הנתונים.</span>
+                </div>
+              )}
+
+              <button type="submit" disabled={isSaving || editingData.status !== 'sold' || (editingData.status === 'sold' && !editingData.saleDate)} className="w-full bg-indigo-600 text-white py-2.5 rounded-md font-medium hover:bg-indigo-700 mt-4 disabled:opacity-50 disabled:cursor-not-allowed">
                 {isSaving ? 'שומר...' : 'שמור פריט'}
               </button>
             </form>
