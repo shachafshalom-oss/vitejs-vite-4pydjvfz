@@ -5,7 +5,7 @@ import { getFirestore, collection, onSnapshot, doc, setDoc, addDoc, updateDoc, d
 import { Plus, Edit, Trash2, Package, TrendingUp, Clock, DollarSign, Activity, X, Search, CheckCircle, Ship, Megaphone, Settings, Layers, ChevronDown, ChevronUp, AlertTriangle, Sparkles, LogOut, Lock } from 'lucide-react';
 
 // ==========================================
-// 1. הגדרות FIREBASE פרטיות (הדבק כאן את שלך משלב 3)
+// 1. הגדרות FIREBASE פרטיות (הדבק כאן את שלך)
 // ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyDpXEMAmwEGzp4AqxRH72ijm1dVcANfIkU",
@@ -297,27 +297,75 @@ export default function App() {
       const data = { ...editingData, updatedAt: new Date().toISOString() };
       
       if (data.id) {
+        // --- עדכון משלוח קיים - סנכרון פריטים חכם ---
         await updateDoc(doc(sRef, data.id), data);
+        
         const currentShipmentItems = items.filter(i => i.shipmentId === data.id);
-        const currentCounts = {};
-        currentShipmentItems.forEach(item => { currentCounts[item.model] = (currentCounts[item.model] || 0) + 1; });
+        const currentItemsByModel = {};
+        currentShipmentItems.forEach(item => {
+          if (!currentItemsByModel[item.model]) currentItemsByModel[item.model] = [];
+          currentItemsByModel[item.model].push(item);
+        });
+
+        const modelsInUpdatedLines = new Set();
 
         for (const line of data.lines) {
+          const model = line.model;
+          modelsInUpdatedLines.add(model);
           const desiredQty = Number(line.qty) || 0;
-          const currentQty = currentCounts[line.model] || 0;
+          const currentModelItems = currentItemsByModel[model] || [];
+          const currentQty = currentModelItems.length;
           const diff = desiredQty - currentQty;
 
+          // 1. הוספת פריטים חסרים (אם הכמות גדלה)
           if (diff > 0) {
             for (let i = 0; i < diff; i++) {
-              await addDoc(itemsRef, { shipmentId: data.id, model: line.model, status: data.status || 'ordered', arrivalDate: data.arrivalDate || null, factoryUnitCostUSD: Number(line.unitCostUSD) || 0, serialNumber: '', repairCost: 0, addOnCost: 0, salePrice: 0, addOnPrice: 0, campaignId: '', createdAt: new Date().toISOString() });
+              await addDoc(itemsRef, { 
+                shipmentId: data.id, model: model, status: data.status || 'ordered', 
+                arrivalDate: data.arrivalDate || null, factoryUnitCostUSD: Number(line.unitCostUSD) || 0, 
+                serialNumber: '', repairCost: 0, addOnCost: 0, salePrice: 0, addOnPrice: 0, 
+                campaignId: '', createdAt: new Date().toISOString() 
+              });
+            }
+          } 
+          // 2. מחיקת פריטים עודפים (אם הכמות קטנה)
+          else if (diff < 0) {
+            const itemsToRemoveCount = Math.abs(diff);
+            // מיון כך שקודם ימחקו פריטים שטרם נמכרו
+            const sortedToRemove = [...currentModelItems].sort((a, b) => {
+              if (a.status === 'sold' && b.status !== 'sold') return 1;
+              if (a.status !== 'sold' && b.status === 'sold') return -1;
+              return 0;
+            });
+
+            for (let i = 0; i < itemsToRemoveCount; i++) {
+              if (sortedToRemove[i]) {
+                await deleteDoc(doc(db, 'crm_items', sortedToRemove[i].id));
+                sortedToRemove[i]._deleted = true; // סימון מקומי למניעת עדכונים בהמשך הלולאה
+              }
             }
           }
-          const itemsToUpdateCost = currentShipmentItems.filter(i => i.model === line.model && Number(i.factoryUnitCostUSD) !== Number(line.unitCostUSD));
+
+          // 3. עדכון עלות יחידה לפריטים שנותרו
+          const itemsToUpdateCost = currentModelItems.filter(i => !i._deleted && Number(i.factoryUnitCostUSD) !== Number(line.unitCostUSD));
           for (const item of itemsToUpdateCost) {
             await updateDoc(doc(itemsRef, item.id), { factoryUnitCostUSD: Number(line.unitCostUSD), updatedAt: new Date().toISOString() });
           }
         }
+
+        // 4. ניקוי דגמים שהוסרו לחלוטין (נמחקה שורה שלמה מהטופס)
+        for (const model in currentItemsByModel) {
+          if (!modelsInUpdatedLines.has(model)) {
+            for (const item of currentItemsByModel[model]) {
+              if (!item._deleted) {
+                await deleteDoc(doc(db, 'crm_items', item.id));
+              }
+            }
+          }
+        }
+
       } else {
+        // --- יצירת משלוח חדש ---
         data.status = 'ordered';
         data.createdAt = new Date().toISOString();
         const docRef = await addDoc(sRef, data);
@@ -363,9 +411,19 @@ export default function App() {
     } catch (err) { alert("שגיאה בשמירה"); }
   };
 
+  // מחיקה חכמה גם למשלוח שלם (מוחק את כל הפריטים שתחתיו כדי לא להשאיר זבל במסד הנתונים)
   const deleteDocHandler = async (collectionName, id) => {
-    if (!window.confirm("בטוח שברצונך למחוק? הפעולה אינה ניתנת לביטול.")) return;
-    try { await deleteDoc(doc(db, collectionName, id)); } catch (err) { console.error(err); }
+    if (!window.confirm("בטוח שברצונך למחוק? הפעולה אינה ניתנת לביטול ותמחק גם את הפריטים המשויכים.")) return;
+    try { 
+      await deleteDoc(doc(db, collectionName, id)); 
+      
+      if (collectionName === 'crm_shipments') {
+        const itemsToDelete = items.filter(i => i.shipmentId === id);
+        for (const item of itemsToDelete) {
+          await deleteDoc(doc(db, 'crm_items', item.id));
+        }
+      }
+    } catch (err) { console.error(err); }
   };
 
   // --- Render Login Screen if not authenticated ---
@@ -755,7 +813,7 @@ export default function App() {
             <h3 className="font-bold text-lg mb-2">קליטת משלוח למחסן</h3>
             <label className="block text-sm mb-1">תאריך הגעה בפועל</label>
             <input type="date" className="w-full border p-2 rounded mb-4" value={arrivalPrompt.date} onChange={e => setArrivalPrompt({...arrivalPrompt, date: e.target.value})} />
-            <div className="flex gap-2"><button onClick={confirmArrivalDatePrompt} className="bg-indigo-600 text-white p-2 rounded flex-1">אישור</button><button onClick={()=>setArrivalPrompt({isOpen:false})} className="bg-slate-200 p-2 rounded">ביטול</button></div>
+            <div className="flex gap-2"><button onClick={() => { confirmShipmentStatusUpdate(arrivalPrompt.shipment, 'in_warehouse', arrivalPrompt.date || new Date().toISOString().split('T')[0]); setArrivalPrompt({isOpen:false}); }} className="bg-indigo-600 text-white p-2 rounded flex-1">אישור</button><button onClick={()=>setArrivalPrompt({isOpen:false})} className="bg-slate-200 p-2 rounded">ביטול</button></div>
           </div>
         </div>
       )}
